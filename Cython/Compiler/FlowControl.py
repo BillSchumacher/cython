@@ -158,14 +158,18 @@ class ControlFlow(object):
                 entry.error_on_uninitialized)
 
     def is_statically_assigned(self, entry):
-        if (entry.is_local and entry.is_variable and
-                (entry.type.is_struct_or_union or
-                 entry.type.is_complex or
-                 entry.type.is_array or
-                 (entry.type.is_cpp_class and not entry.is_cpp_optional))):
-            # stack allocated structured variable => never uninitialised
-            return True
-        return False
+        return bool(
+            (
+                entry.is_local
+                and entry.is_variable
+                and (
+                    entry.type.is_struct_or_union
+                    or entry.type.is_complex
+                    or entry.type.is_array
+                    or (entry.type.is_cpp_class and not entry.is_cpp_optional)
+                )
+            )
+        )
 
     def mark_position(self, node):
         """Mark position, will be used to draw graph nodes."""
@@ -341,18 +345,17 @@ class NameAssignment(object):
 
     @property
     def type(self):
-        if not self.entry.type.is_unspecified:
-            return self.entry.type
-        return self.inferred_type
+        return (
+            self.inferred_type
+            if self.entry.type.is_unspecified
+            else self.entry.type
+        )
 
 
 class StaticAssignment(NameAssignment):
     """Initialised at declaration time, e.g. stack allocation."""
     def __init__(self, entry):
-        if not entry.type.is_pyobject:
-            may_be_none = False
-        else:
-            may_be_none = None  # unknown
+        may_be_none = None if entry.type.is_pyobject else False
         lhs = TypedExprNode(
             entry.type, may_be_none=may_be_none, pos=entry.pos)
         super(StaticAssignment, self).__init__(lhs, lhs, entry)
@@ -424,9 +427,8 @@ class ControlFlowState(list):
         elif Unknown in state:
             state.discard(Unknown)
             self.cf_maybe_null = True
-        else:
-            if len(state) == 1:
-                self.is_single = True
+        elif len(state) == 1:
+            self.is_single = True
         # XXX: Remove fake_rhs_expr
         super(ControlFlowState, self).__init__(
             [i for i in state if i.rhs is not fake_rhs_expr])
@@ -575,10 +577,7 @@ def check_definitions(flow, compiler_directives):
     for node in assmt_nodes:
         if Uninitialized in node.cf_state:
             node.cf_maybe_null = True
-            if len(node.cf_state) == 1:
-                node.cf_is_null = True
-            else:
-                node.cf_is_null = False
+            node.cf_is_null = len(node.cf_state) == 1
         elif Unknown in node.cf_state:
             node.cf_maybe_null = True
         else:
@@ -642,15 +641,13 @@ def check_definitions(flow, compiler_directives):
         if (not entry.cf_references
                 and not entry.is_pyclass_attr):
             if entry.name != '_' and not entry.name.startswith('unused'):
-                # '_' is often used for unused variables, e.g. in loops
                 if entry.is_arg:
                     if warn_unused_arg:
                         messages.warning(entry.pos, "Unused argument '%s'" %
                                          entry.name)
-                else:
-                    if warn_unused:
-                        messages.warning(entry.pos, "Unused entry '%s'" %
-                                         entry.name)
+                elif warn_unused:
+                    messages.warning(entry.pos, "Unused entry '%s'" %
+                                     entry.name)
             entry.cf_used = False
 
     messages.report()
@@ -783,10 +780,7 @@ class ControlFlowAnalysis(CythonTransform):
         if not rhs:
             rhs = self.object_expr
         if lhs.is_name:
-            if lhs.entry is not None:
-                entry = lhs.entry
-            else:
-                entry = self.env.lookup(lhs.name)
+            entry = lhs.entry if lhs.entry is not None else self.env.lookup(lhs.name)
             if entry is None:  # TODO: This shouldn't happen...
                 return
             self.flow.mark_assignment(lhs, rhs, entry, rhs_scope=rhs_scope)
@@ -821,7 +815,7 @@ class ControlFlowAnalysis(CythonTransform):
         return node
 
     def visit_AssignmentNode(self, node):
-        raise InternalError("Unhandled assignment node %s" % type(node))
+        raise InternalError(f"Unhandled assignment node {type(node)}")
 
     def visit_SingleAssignmentNode(self, node):
         self._visit(node.rhs)
@@ -866,8 +860,7 @@ class ControlFlowAnalysis(CythonTransform):
         return node
 
     def visit_CArgDeclNode(self, node):
-        entry = self.env.lookup(node.name)
-        if entry:
+        if entry := self.env.lookup(node.name):
             may_be_none = not node.not_none
             self.flow.mark_argument(
                 node, TypedExprNode(entry.type, may_be_none), entry)
@@ -875,8 +868,7 @@ class ControlFlowAnalysis(CythonTransform):
 
     def visit_NameNode(self, node):
         if self.flow.block:
-            entry = node.entry or self.env.lookup(node.name)
-            if entry:
+            if entry := node.entry or self.env.lookup(node.name):
                 self.flow.mark_reference(node, entry)
 
                 if entry in self.reductions and not self.in_inplace_assignment:
@@ -925,10 +917,7 @@ class ControlFlowAnalysis(CythonTransform):
         else:
             parent.add_child(next_block)
 
-        if next_block.parents:
-            self.flow.block = next_block
-        else:
-            self.flow.block = None
+        self.flow.block = next_block if next_block.parents else None
         return node
 
     def visit_AssertStatNode(self, node):
@@ -945,10 +934,7 @@ class ControlFlowAnalysis(CythonTransform):
         if self.flow.block:
             self.flow.block.add_child(next_block)
         parent.add_child(next_block)
-        if next_block.parents:
-            self.flow.block = next_block
-        else:
-            self.flow.block = None
+        self.flow.block = next_block if next_block.parents else None
         return node
 
     def visit_WhileStatNode(self, node):
@@ -975,10 +961,7 @@ class ControlFlowAnalysis(CythonTransform):
         else:
             condition_block.add_child(next_block)
 
-        if next_block.parents:
-            self.flow.block = next_block
-        else:
-            self.flow.block = None
+        self.flow.block = next_block if next_block.parents else None
         return node
 
     def mark_forloop_target(self, node):
@@ -1012,18 +995,20 @@ class ControlFlowAnalysis(CythonTransform):
             function = sequence.function
             if sequence.self is None and function.is_name:
                 entry = env.lookup(function.name)
-                if not entry or entry.is_builtin:
-                    if function.name in ('range', 'xrange'):
-                        is_special = True
-                        for arg in sequence.args[:2]:
-                            self.mark_assignment(target, arg, rhs_scope=node.iterator.expr_scope)
-                        if len(sequence.args) > 2:
-                            self.mark_assignment(target, self.constant_folder(
-                                ExprNodes.binop_node(node.pos,
-                                                     '+',
-                                                     sequence.args[0],
-                                                     sequence.args[2])),
-                                                rhs_scope=node.iterator.expr_scope)
+                if (not entry or entry.is_builtin) and function.name in (
+                    'range',
+                    'xrange',
+                ):
+                    is_special = True
+                    for arg in sequence.args[:2]:
+                        self.mark_assignment(target, arg, rhs_scope=node.iterator.expr_scope)
+                    if len(sequence.args) > 2:
+                        self.mark_assignment(target, self.constant_folder(
+                            ExprNodes.binop_node(node.pos,
+                                                 '+',
+                                                 sequence.args[0],
+                                                 sequence.args[2])),
+                                            rhs_scope=node.iterator.expr_scope)
 
         if not is_special:
             # A for-loop basically translates to subsequent calls to
@@ -1075,10 +1060,7 @@ class ControlFlowAnalysis(CythonTransform):
         else:
             condition_block.add_child(next_block)
 
-        if next_block.parents:
-            self.flow.block = next_block
-        else:
-            self.flow.block = None
+        self.flow.block = next_block if next_block.parents else None
         return node
 
     def _delete_privates(self, node, exclude=None):
@@ -1146,10 +1128,7 @@ class ControlFlowAnalysis(CythonTransform):
         else:
             condition_block.add_child(next_block)
 
-        if next_block.parents:
-            self.flow.block = next_block
-        else:
-            self.flow.block = None
+        self.flow.block = next_block if next_block.parents else None
         return node
 
     def visit_LoopNode(self, node):
@@ -1184,21 +1163,17 @@ class ControlFlowAnalysis(CythonTransform):
         self.flow.exceptions.pop()
 
         # After exception
+        if self.flow.block and node.else_clause:
+            self.flow.nextblock()
+            self._visit(node.else_clause)
         if self.flow.block:
-            if node.else_clause:
-                self.flow.nextblock()
-                self._visit(node.else_clause)
-            if self.flow.block:
-                self.flow.block.add_child(next_block)
+            self.flow.block.add_child(next_block)
 
         for clause in node.except_clauses:
             self.flow.block = entry_point
             if clause.pattern:
                 for pattern in clause.pattern:
                     self._visit(pattern)
-            else:
-                # TODO: handle * pattern
-                pass
             entry_point = self.flow.newblock(parent=self.flow.block)
             self.flow.nextblock()
             if clause.target:
@@ -1210,10 +1185,7 @@ class ControlFlowAnalysis(CythonTransform):
         if self.flow.exceptions:
             entry_point.add_child(self.flow.exceptions[-1].entry_point)
 
-        if next_block.parents:
-            self.flow.block = next_block
-        else:
-            self.flow.block = None
+        self.flow.block = next_block if next_block.parents else None
         return node
 
     def visit_TryFinallyStatNode(self, node):
@@ -1281,12 +1253,15 @@ class ControlFlowAnalysis(CythonTransform):
             if handler.finally_enter:
                 self.flow.block.add_child(handler.finally_enter)
                 if handler.finally_exit:
-                    # 'return' goes to function exit, or to the next outer 'finally' clause
-                    exit_point = self.flow.exit_point
-                    for next_handler in outer_exception_handlers:
-                        if next_handler.finally_enter:
-                            exit_point = next_handler.finally_enter
-                            break
+                    exit_point = next(
+                        (
+                            next_handler.finally_enter
+                            for next_handler in outer_exception_handlers
+                            if next_handler.finally_enter
+                        ),
+                        self.flow.exit_point,
+                    )
+
                     handler.finally_exit.add_child(exit_point)
                 break
         else:

@@ -42,7 +42,7 @@ def find_package_base(path):
     base_dir, package_path = os.path.split(path)
     while is_package_dir(base_dir):
         base_dir, parent = os.path.split(base_dir)
-        package_path = '%s/%s' % (parent, package_path)
+        package_path = f'{parent}/{package_path}'
     return base_dir, package_path
 
 
@@ -192,7 +192,7 @@ def parse_args_raw(parser, args):
     # some of them are in unknown
     for option in unknown:
         if option.startswith('-'):
-            parser.error("unknown option "+option)
+            parser.error(f"unknown option {option}")
         else:
             sources.append(option)
     del options.sources
