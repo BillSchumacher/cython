@@ -28,13 +28,11 @@ class NodeTypeWriter(TreeVisitor):
             name = u"(root)"
         else:
             tip = self.access_path[-1]
-            if tip[2] is not None:
-                name = u"%s[%d]" % tip[1:3]
-            else:
-                name = tip[1]
+            name = u"%s[%d]" % tip[1:3] if tip[2] is not None else tip[1]
+        self.result.append(
+            (u"  " * self._indents + f"{name}: {node.__class__.__name__}")
+        )
 
-        self.result.append(u"  " * self._indents +
-                           u"%s: %s" % (name, node.__class__.__name__))
         self._indents += 1
         self.visitchildren(node)
         self._indents -= 1
@@ -228,7 +226,7 @@ class TreeAssertVisitor(VisitorTransform):
             content = _strip_c_comments(content)
             validate_file_content(c_file, content)
 
-            html_file = os.path.splitext(c_file)[0] + ".html"
+            html_file = f"{os.path.splitext(c_file)[0]}.html"
             if os.path.exists(html_file) and os.path.getmtime(c_file) <= os.path.getmtime(html_file):
                 with open(html_file, encoding='utf8') as f:
                     content = f.read()

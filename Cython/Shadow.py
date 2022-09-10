@@ -32,7 +32,7 @@ class _ArrayType(object):
         elif self.is_f_contig:
             axes[0] = "::1"
 
-        return "%s[%s]" % (self.dtype, ", ".join(axes))
+        return f'{self.dtype}[{", ".join(axes)}]'
 
 
 def index_type(base_type, item):
@@ -149,9 +149,7 @@ def cdiv(a, b):
     if a < 0:
         a = -a
         b = -b
-    if b < 0:
-        return (a + b + 1) // b
-    return a // b
+    return (a + b + 1) // b if b < 0 else a // b
 
 def cmod(a, b):
     r = a % b
@@ -202,11 +200,7 @@ class _nogil(object):
     """Support for 'with nogil' statement and @nogil decorator.
     """
     def __call__(self, x):
-        if callable(x):
-            # Used as function decorator => return the function unchanged.
-            return x
-        # Used as conditional context manager or to create an "@nogil(True/False)" decorator => keep going.
-        return self
+        return x if callable(x) else self
 
     def __enter__(self):
         pass
@@ -222,15 +216,15 @@ del _nogil
 
 class CythonMetaType(type):
 
-    def __getitem__(type, ix):
-        return array(type, ix)
+    def __getitem__(self, ix):
+        return array(self, ix)
 
 CythonTypeObject = CythonMetaType('CythonTypeObject', (object,), {})
 
 class CythonType(CythonTypeObject):
 
     def _pointer(self, n=1):
-        for i in range(n):
+        for _ in range(n):
             self = pointer(self)
         return self
 
@@ -265,7 +259,7 @@ class PointerType(CythonType):
             return not self._items and not value._items
 
     def __repr__(self):
-        return "%s *" % (self._basetype,)
+        return f"{self._basetype} *"
 
 class ArrayType(PointerType):
 
@@ -296,8 +290,10 @@ class StructType(CythonType):
         else:
             for key, value in data.items():
                 if key not in self._members:
-                    raise ValueError("Invalid struct attribute for %s: %s" % (
-                        self.__class__.__name__, key))
+                    raise ValueError(
+                        f"Invalid struct attribute for {self.__class__.__name__}: {key}"
+                    )
+
                 setattr(self, key, value)
             return
 
@@ -305,7 +301,7 @@ class StructType(CythonType):
         if data:
             raise ValueError('Cannot accept keyword arguments when casting.')
         if type(cast_from) is not type(self):
-            raise ValueError('Cannot cast from %s' % cast_from)
+            raise ValueError(f'Cannot cast from {cast_from}')
         for key, value in cast_from.__dict__.items():
             setattr(self, key, value)
 
@@ -321,14 +317,14 @@ class UnionType(CythonType):
     def __init__(self, cast_from=_Unspecified, **data):
         if cast_from is not _Unspecified:
             # do type cast
-            if len(data) > 0:
+            if data:
                 raise ValueError('Cannot accept keyword arguments when casting.')
             if isinstance(cast_from, dict):
                 datadict = cast_from
             elif type(cast_from) is type(self):
                 datadict = cast_from.__dict__
             else:
-                raise ValueError('Cannot cast from %s' % cast_from)
+                raise ValueError(f'Cannot cast from {cast_from}')
         else:
             datadict = data
         if len(datadict) > 1:
@@ -376,8 +372,7 @@ class typedef(CythonType):
         self.name = name
 
     def __call__(self, *arg):
-        value = cast(self._basetype, *arg)
-        return value
+        return cast(self._basetype, *arg)
 
     def __repr__(self):
         return self.name or str(self._basetype)
@@ -477,8 +472,8 @@ for name in int_types:
     reprname = to_repr(name, name)
     gs[name] = typedef(py_int, reprname)
     if name not in ('Py_UNICODE', 'Py_UCS4') and not name.endswith('size_t'):
-        gs['u'+name] = typedef(py_int, "unsigned " + reprname)
-        gs['s'+name] = typedef(py_int, "signed " + reprname)
+        gs[f'u{name}'] = typedef(py_int, f"unsigned {reprname}")
+        gs[f's{name}'] = typedef(py_int, f"signed {reprname}")
 
 for name in float_types:
     gs[name] = typedef(py_float, to_repr(name, name))
@@ -492,7 +487,7 @@ Py_tss_t = typedef(None, "Py_tss_t")
 
 for t in int_types + float_types + complex_types + other_types:
     for i in range(1, 4):
-        gs["%s_%s" % ('p'*i, t)] = gs[t]._pointer(i)
+        gs[f"{'p' * i}_{t}"] = gs[t]._pointer(i)
 
 NULL = gs['p_void'](0)
 
@@ -544,9 +539,11 @@ class CythonDotImportedFromElsewhere(object):
         except ImportError:
             # but if they don't exist (Python is not sufficiently up-to-date) then
             # you can't use them
-            raise AttributeError("%s: the standard library module %s is not available" %
-                                 (attr, self.__name__))
-        sys.modules['cython.%s' % self.__name__] = mod
+            raise AttributeError(
+                f"{attr}: the standard library module {self.__name__} is not available"
+            )
+
+        sys.modules[f'cython.{self.__name__}'] = mod
         return getattr(mod, attr)
 
 

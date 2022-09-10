@@ -123,7 +123,7 @@ class AnnotationCCodeWriter(CCodeWriter):
             code = f.read()
         generated_code = self.code.get(source_filename, {})
         c_file = Utils.decode_filename(os.path.basename(target_filename))
-        html_filename = os.path.splitext(target_filename)[0] + ".html"
+        html_filename = f"{os.path.splitext(target_filename)[0]}.html"
 
         with codecs.open(html_filename, "w", encoding="UTF-8") as out_buffer:
             out_buffer.write(self._save_annotation(code, generated_code, c_file, source_filename, coverage_xml))
@@ -197,10 +197,10 @@ class AnnotationCCodeWriter(CCodeWriter):
                 coverage_data = entry  # but we might still find a better match...
         if coverage_data is None:
             return None
-        return dict(
-            (int(line.get('number')), int(line.get('hits')))
+        return {
+            int(line.get('number')): int(line.get('hits'))
             for line in coverage_data.iterfind('lines/line')
-        )
+        }
 
     def _htmlify_code(self, code, language):
         try:
@@ -218,18 +218,16 @@ class AnnotationCCodeWriter(CCodeWriter):
         else:
             # unknown language, use fallback
             return html_escape(code)
-        html_code = highlight(
-            code, lexer,
-            HtmlFormatter(nowrap=True))
-        return html_code
+        return highlight(code, lexer, HtmlFormatter(nowrap=True))
 
     def _save_annotation_body(self, cython_code, generated_code, annotation_items, scopes, covered_lines=None):
         outlist = [u'<div class="cython">']
         pos_comment_marker = u'/* \N{HORIZONTAL ELLIPSIS} */\n'
-        new_calls_map = dict(
-            (name, 0) for name in
-            'refnanny trace py_macro_api py_c_api pyx_macro_api pyx_c_api error_goto'.split()
-        ).copy
+        new_calls_map = {
+            name: 0
+            for name in 'refnanny trace py_macro_api py_c_api pyx_macro_api pyx_c_api error_goto'.split()
+        }.copy
+
 
         self.mark_pos(None)
 

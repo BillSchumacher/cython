@@ -58,9 +58,11 @@ if sys.version_info[0] < 3:
     if _fs_encoding is None:
         _fs_encoding = sys.getdefaultencoding()
     def encode_filename_in_py2(filename):
-        if not isinstance(filename, bytes):
-            return filename.encode(_fs_encoding)
-        return filename
+        return (
+            filename
+            if isinstance(filename, bytes)
+            else filename.encode(_fs_encoding)
+        )
 else:
     def encode_filename_in_py2(filename):
         return filename
@@ -78,12 +80,10 @@ def _make_relative(file_paths, base=None):
 
 def extended_iglob(pattern):
     if '{' in pattern:
-        m = re.match('(.*){([^}]+)}(.*)', pattern)
-        if m:
+        if m := re.match('(.*){([^}]+)}(.*)', pattern):
             before, switch, after = m.groups()
             for case in switch.split(','):
-                for path in extended_iglob(before + case + after):
-                    yield path
+                yield from extended_iglob(before + case + after)
             return
 
     # We always accept '/' and also '\' on Windows,
@@ -91,10 +91,7 @@ def extended_iglob(pattern):
     if '**/' in pattern or os.sep == '\\' and '**\\' in pattern:
         seen = set()
         first, rest = re.split(r'\*\*[%s]' % ('/\\\\' if os.sep == '\\' else '/'), pattern, 1)
-        if first:
-            first = iglob(first + os.sep)
-        else:
-            first = ['']
+        first = iglob(first + os.sep) if first else ['']
         for root in first:
             for path in extended_iglob(join_path(root, rest)):
                 if path not in seen:
@@ -105,8 +102,7 @@ def extended_iglob(pattern):
                     seen.add(path)
                     yield path
     else:
-        for path in iglob(pattern):
-            yield path
+        yield from iglob(pattern)
 
 
 def nonempty(it, error_msg="expected non-empty iterator"):
@@ -124,10 +120,8 @@ def file_hash(filename):
     prefix = ('%d:%s' % (len(path), path)).encode("UTF-8")
     m = hashlib.sha1(prefix)
     with open(path, 'rb') as f:
-        data = f.read(65000)
-        while data:
+        while data := f.read(65000):
             m.update(data)
-            data = f.read(65000)
     return m.hexdigest()
 
 
@@ -150,10 +144,8 @@ def update_pythran_extension(ext):
 
     # These options are not compatible with the way normal Cython extensions work
     for bad_option in ["-fwhole-program", "-fvisibility=hidden"]:
-        try:
+        with contextlib.suppress(ValueError):
             ext.extra_compile_args.remove(bad_option)
-        except ValueError:
-            pass
 
 
 def parse_list(s):
@@ -179,10 +171,8 @@ def parse_list(s):
     s, literals = strip_string_literals(s)
     def unquote(literal):
         literal = literal.strip()
-        if literal[0] in "'\"":
-            return literals[literal[1:-1]]
-        else:
-            return literal
+        return literals[literal[1:-1]] if literal[0] in "'\"" else literal
+
     return [unquote(item) for item in s.split(delimiter) if item.strip()]
 
 
@@ -221,8 +211,7 @@ def line_iter(source):
             yield source[start:end]
             start = end+1
     else:
-        for line in source:
-            yield line
+        yield from source
 
 
 class DistutilsInfo(object):
@@ -255,8 +244,7 @@ class DistutilsInfo(object):
             for key in distutils_settings:
                 if key in ('name', 'sources','np_pythran'):
                     continue
-                value = getattr(exn, key, None)
-                if value:
+                if value := getattr(exn, key, None):
                     self.values[key] = value
 
     def merge(self, other):
@@ -285,7 +273,9 @@ class DistutilsInfo(object):
         resolved = DistutilsInfo()
         for key, value in self.values.items():
             type = distutils_settings[key]
-            if type in [list, transitive_list]:
+            if type != list and type != transitive_list and value in aliases:
+                value = aliases[value]
+            elif type in [list, transitive_list]:
                 new_value_list = []
                 for v in value:
                     if v in aliases:
@@ -295,9 +285,6 @@ class DistutilsInfo(object):
                     else:
                         new_value_list.append(v)
                 value = new_value_list
-            else:
-                if value in aliases:
-                    value = aliases[value]
             resolved.values[key] = value
         return resolved
 
@@ -345,7 +332,6 @@ def strip_string_literals(code, prefix='__Pyx_L'):
             new_code.append(code[start:])
             break
 
-        # Try to close the quote.
         elif in_quote:
             if code[q-1] == u'\\':
                 k = 2
@@ -357,35 +343,28 @@ def strip_string_literals(code, prefix='__Pyx_L'):
             if code[q] == quote_type and (
                     quote_len == 1 or (code_len > q + 2 and quote_type == code[q+1] == code[q+2])):
                 counter += 1
-                label = "%s%s_" % (prefix, counter)
+                label = f"{prefix}{counter}_"
                 literals[label] = code[start+quote_len:q]
                 full_quote = code[q:q+quote_len]
-                new_code.append(full_quote)
-                new_code.append(label)
-                new_code.append(full_quote)
+                new_code.extend((full_quote, label, full_quote))
                 q += quote_len
                 in_quote = False
                 start = q
             else:
                 q += 1
 
-        # Process comment.
-        elif -1 != hash_mark and (hash_mark < q or q == -1):
+        elif hash_mark != -1 and ((hash_mark < q or q == -1)):
             new_code.append(code[start:hash_mark+1])
             end = code.find('\n', hash_mark)
             counter += 1
-            label = "%s%s_" % (prefix, counter)
-            if end == -1:
-                end_or_none = None
-            else:
-                end_or_none = end
+            label = f"{prefix}{counter}_"
+            end_or_none = None if end == -1 else end
             literals[label] = code[hash_mark+1:end_or_none]
             new_code.append(label)
             if end == -1:
                 break
             start = q = end
 
-        # Open the quote.
         else:
             if code_len >= q+3 and (code[q] == code[q+1] == code[q+2]):
                 quote_len = 3
@@ -500,8 +479,9 @@ def parse_dependencies(source_filename):
         cimport_from, cimport_list, extern, include = m.groups()
         if cimport_from:
             cimports.append(cimport_from)
-            m_after_from = dependency_after_from_regex.search(source, pos=m.end())
-            if m_after_from:
+            if m_after_from := dependency_after_from_regex.search(
+                source, pos=m.end()
+            ):
                 multiline, one_line = m_after_from.groups()
                 subimports = multiline or one_line
                 cimports.extend("{0}.{1}".format(cimport_from, s.strip())
@@ -538,7 +518,7 @@ class DependencyTree(object):
             if not path_exists(include_path):
                 include_path = self.context.find_include_file(include, source_file_path=filename)
             if include_path:
-                if '.' + os.path.sep in include_path:
+                if f'.{os.path.sep}' in include_path:
                     include_path = os.path.normpath(include_path)
                 all.add(include_path)
                 all.update(self.included_files(include_path))
@@ -590,8 +570,9 @@ class DependencyTree(object):
                     return None   # FIXME: error?
                 module_path.pop(0)
             relative = '.'.join(package_path + module_path)
-            pxd = self.context.find_pxd_file(relative, source_file_path=filename)
-            if pxd:
+            if pxd := self.context.find_pxd_file(
+                relative, source_file_path=filename
+            ):
                 return pxd
         if is_relative:
             return None   # FIXME: error?
@@ -600,8 +581,8 @@ class DependencyTree(object):
     @cached_method
     def cimported_files(self, filename):
         filename_root, filename_ext = os.path.splitext(filename)
-        if filename_ext in ('.pyx', '.py') and path_exists(filename_root + '.pxd'):
-            pxd_list = [filename_root + '.pxd']
+        if filename_ext in ('.pyx', '.py') and path_exists(f'{filename_root}.pxd'):
+            pxd_list = [f'{filename_root}.pxd']
         else:
             pxd_list = []
         # Cimports generates all possible combinations package.module
@@ -632,7 +613,7 @@ class DependencyTree(object):
         return self.timestamp(filename), filename
 
     def newest_dependency(self, filename):
-        return max([self.extract_timestamp(f) for f in self.all_dependencies(filename)])
+        return max(self.extract_timestamp(f) for f in self.all_dependencies(filename))
 
     def transitive_fingerprint(self, filename, module, compilation_options):
         r"""
@@ -710,11 +691,10 @@ class DependencyTree(object):
             loop = None
             for next in outgoing(node):
                 sub_deps, sub_loop = self.transitive_merge_helper(next, extract, merge, seen, stack, outgoing)
-                if sub_loop is not None:
-                    if loop is not None and stack[loop] < stack[sub_loop]:
-                        pass
-                    else:
-                        loop = sub_loop
+                if sub_loop is not None and (
+                    loop is None or stack[loop] >= stack[sub_loop]
+                ):
+                    loop = sub_loop
                 deps = merge(deps, sub_deps)
             if loop == node:
                 loop = None
@@ -781,7 +761,10 @@ def create_extension_list(patterns, exclude=None, ctx=None, aliases=None, quiet=
     else:
         # dummy class, in case we do not have setuptools
         Extension_distutils = Extension
-        class Extension_setuptools(Extension): pass
+
+
+        class Extension_setuptools(Extension_distutils): pass
+
 
     # if no create_extension() function is defined, use a simple
     # default function.
@@ -797,9 +780,11 @@ def create_extension_list(patterns, exclude=None, ctx=None, aliases=None, quiet=
             base = None
             ext_language = language
         elif isinstance(pattern, (Extension_distutils, Extension_setuptools)):
-            cython_sources = [s for s in pattern.sources
-                              if os.path.splitext(s)[1] in ('.py', '.pyx')]
-            if cython_sources:
+            if cython_sources := [
+                s
+                for s in pattern.sources
+                if os.path.splitext(s)[1] in ('.py', '.pyx')
+            ]:
                 filepattern = cython_sources[0]
                 if len(cython_sources) > 1:
                     print(u"Warning: Multiple cython sources found for extension '%s': %s\n"
@@ -878,7 +863,7 @@ def create_extension_list(patterns, exclude=None, ctx=None, aliases=None, quiet=
                         m.sources.remove(target_file)
                     except ValueError:
                         # never seen this in the wild, but probably better to warn about this unexpected case
-                        print(u"Warning: Cython source file not found in sources list, adding %s" % file)
+                        print(f"Warning: Cython source file not found in sources list, adding {file}")
                     m.sources.insert(0, file)
                 seen.add(name)
     return module_list, module_metadata

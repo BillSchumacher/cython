@@ -372,10 +372,7 @@ def generate_init_code(code, init, node, fields, kw_only):
     seen_default = False
     for name, field in fields.items():
         entry = node.scope.lookup(name)
-        if entry.annotation:
-            annotation = u": %s" % entry.annotation.string.value
-        else:
-            annotation = u""
+        annotation = f": {entry.annotation.string.value}" if entry.annotation else u""
         assignment = u''
         if field.default is not MISSING or field.default_factory is not MISSING:
             seen_default = True
@@ -459,37 +456,23 @@ def generate_cmp_code(code, op, funcname, node, fields):
     if not names:
         return  # no comparable types
 
-    code.add_code_lines([
-        "def %s(self, other):" % funcname,
-        "    if not isinstance(other, %s):" % node.class_name,
-        "        return NotImplemented",
-        #
-        "    cdef %s other_cast" % node.class_name,
-        "    other_cast = <%s>other" % node.class_name,
-    ])
+    code.add_code_lines(
+        [
+            f"def {funcname}(self, other):",
+            f"    if not isinstance(other, {node.class_name}):",
+            "        return NotImplemented",
+            f"    cdef {node.class_name} other_cast",
+            f"    other_cast = <{node.class_name}>other",
+        ]
+    )
 
-    # The Python implementation of dataclasses.py does a tuple comparison
-    # (roughly):
-    #  return self._attributes_to_tuple() {op} other._attributes_to_tuple()
-    #
-    # For the Cython implementation a tuple comparison isn't an option because
-    # not all attributes can be converted to Python objects and stored in a tuple
-    #
-    # TODO - better diagnostics of whether the types support comparison before
-    #    generating the code. Plus, do we want to convert C structs to dicts and
-    #    compare them that way (I think not, but it might be in demand)?
-    checks = []
-    for name in names:
-        checks.append("(self.%s %s other_cast.%s)" % (
-            name, op, name))
 
-    if checks:
+    if checks := [f"(self.{name} {op} other_cast.{name})" for name in names]:
         code.add_code_line("    return " + " and ".join(checks))
+    elif "=" in op:
+        code.add_code_line("    return True")  # "() == ()" is True
     else:
-        if "=" in op:
-            code.add_code_line("    return True")  # "() == ()" is True
-        else:
-            code.add_code_line("    return False")
+        code.add_code_line("    return False")
 
 
 def generate_eq_code(code, eq, node, fields):
@@ -547,13 +530,16 @@ def generate_hash_code(code, unsafe_hash, eq, frozen, node, fields):
     anything though...).
     """
 
-    hash_entry = node.scope.lookup_here("__hash__")
-    if hash_entry:
+    if hash_entry := node.scope.lookup_here("__hash__"):
         # TODO ideally assignment of __hash__ to None shouldn't trigger this
         # but difficult to get the right information here
         if unsafe_hash:
             # error message taken from CPython dataclasses module
-            error(node.pos, "Cannot overwrite attribute __hash__ in class %s" % node.class_name)
+            error(
+                node.pos,
+                f"Cannot overwrite attribute __hash__ in class {node.class_name}",
+            )
+
         return
 
     if not unsafe_hash:
@@ -578,13 +564,12 @@ def generate_hash_code(code, unsafe_hash, eq, frozen, node, fields):
         return  # nothing to hash
 
     # make a tuple of the hashes
-    hash_tuple_items = u", ".join(u"hash(self.%s)" % name for name in names)
+    hash_tuple_items = u", ".join(f"hash(self.{name})" for name in names)
 
     # if we're here we want to generate a hash
-    code.add_code_lines([
-        "def __hash__(self):",
-        "    return hash((%s))" % hash_tuple_items,
-    ])
+    code.add_code_lines(
+        ["def __hash__(self):", f"    return hash(({hash_tuple_items}))"]
+    )
 
 
 def get_field_type(pos, entry):
@@ -601,24 +586,12 @@ def get_field_type(pos, entry):
         # entry.annotation
         # (TODO: remove .string if we ditch PEP563)
         return entry.annotation.string
-        # If they do in future then we may need to look up into that
-        # to duplicating the node. The code below should do this:
-        #class_name_node = ExprNodes.NameNode(pos, name=entry.scope.name)
-        #annotations = ExprNodes.AttributeNode(
-        #    pos, obj=class_name_node,
-        #    attribute=EncodedString("__annotations__")
-        #)
-        #return ExprNodes.IndexNode(
-        #    pos, base=annotations,
-        #    index=ExprNodes.StringNode(pos, value=entry.name)
-        #)
-    else:
-        # it's slightly unclear what the best option is here - we could
-        # try to return PyType_Type. This case should only happen with
-        # attributes defined with cdef so Cython is free to make it's own
-        # decision
-        s = EncodedString(entry.type.declaration_code("", for_display=1))
-        return ExprNodes.StringNode(pos, value=s)
+    # it's slightly unclear what the best option is here - we could
+    # try to return PyType_Type. This case should only happen with
+    # attributes defined with cdef so Cython is free to make it's own
+    # decision
+    s = EncodedString(entry.type.declaration_code("", for_display=1))
+    return ExprNodes.StringNode(pos, value=s)
 
 
 class FieldRecordNode(ExprNodes.ExprNode):
@@ -706,13 +679,13 @@ def _set_up_dataclass_fields(node, fields, dataclass_module):
     for name, field in fields.items():
         if field.private:
             continue  # doesn't appear in the public interface
-        type_placeholder_name = "PLACEHOLDER_%s" % name
+        type_placeholder_name = f"PLACEHOLDER_{name}"
         placeholders[type_placeholder_name] = get_field_type(
             node.pos, node.scope.entries[name]
         )
 
         # defining these make the fields introspect more like a Python dataclass
-        field_type_placeholder_name = "PLACEHOLDER_FIELD_TYPE_%s" % name
+        field_type_placeholder_name = f"PLACEHOLDER_FIELD_TYPE_{name}"
         if field.is_initvar:
             placeholders[field_type_placeholder_name] = ExprNodes.AttributeNode(
                 node.pos, obj=dataclass_module,
